@@ -4,7 +4,7 @@ DBG = DEBUG
 
 TARGET  = matrix
 BUILD_DIR = build
-SRCS    = src/main.cpp
+SRCS    = src/main.cpp test/test_matrix.cpp
 OBJS    = $(patsubst src/%.c,$(BUILD_DIR)/%.o,$(SRCS))
 
 CC = g++

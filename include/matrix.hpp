@@ -4,10 +4,37 @@
 #include <vector>
 #include <utility>
 #include <stdexcept>
-#include <type_traits> 
+#include <type_traits>
 
 namespace Matrix
 {
+
+namespace Detail {
+
+// Широкий тип для числителя в дробно-свободном исключении (Bareiss).
+// int        -> long long     (гарантированно хватит для всех промежуточных)
+// long long  -> __int128      (числитель может достигать ~1e36)
+// Остальные целые типы маппятся аналогично по размеру.
+#if defined(__SIZEOF_INT128__)
+using WideInt128 = __int128;
+#else
+using WideInt128 = long long;   // запасной вариант (MSVC и т.п.)
+#endif
+
+template <typename T>
+struct WideInteger {
+    using type = std::conditional_t<
+        (sizeof(T) < sizeof(long long)),
+        long long,
+        WideInt128
+    >;
+};
+
+template <typename T>
+using WideInteger_t = typename WideInteger<T>::type;
+
+} // namespace Detail
+
 
 template <typename T>
 class Matrix {
@@ -52,6 +79,8 @@ protected:
 
     T DeterminantInteger()
     {
+        using Wide = Detail::WideInteger_t<T>;
+
         const std::size_t n = size_;
         if (n == 0) return T{1};
 
@@ -60,8 +89,8 @@ protected:
             for (std::size_t j = 0; j < n; ++j)
                 a[i][j] = At(i, j);
 
-        T sign = T{1};
-        T prev = T{1};
+        T    sign = T{1};
+        Wide prev = Wide{1};
 
         for (std::size_t k = 0; k + 1 < n; ++k) {
             if (a[k][k] == T{}) {
@@ -76,13 +105,18 @@ protected:
                 sign = -sign;
             }
 
+            const Wide pivot = static_cast<Wide>(a[k][k]);
+
             for (std::size_t i = k + 1; i < n; ++i) {
                 for (std::size_t j = k + 1; j < n; ++j) {
-                    a[i][j] = (a[i][j] * a[k][k] - a[i][k] * a[k][j]) / prev;
+                    Wide num = static_cast<Wide>(a[i][j]) * pivot
+                             - static_cast<Wide>(a[i][k])
+                               * static_cast<Wide>(a[k][j]);
+                    a[i][j] = static_cast<T>(num / prev);
                 }
             }
 
-            prev = a[k][k];
+            prev = pivot;
         }
 
         return sign * a[n - 1][n - 1];
@@ -124,6 +158,7 @@ public:
         return data_[row * this->size_ + col];
     }
 };
+
 
 template <typename T>
 class JaggedMatrix : public Matrix<T> {
