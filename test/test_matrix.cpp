@@ -1,363 +1,317 @@
-#include <gtest/gtest.h>
-#include "matrix.hpp"
+#ifndef MATRIX_HPP_
+#define MATRIX_HPP_
 
+#include <algorithm>
+#include <array>
 #include <cmath>
+#include <concepts>
+#include <cstddef>
 #include <cstdint>
-#include <limits>
+#include <initializer_list>
 #include <memory>
-#include <random>
 #include <stdexcept>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
-using Matrix::ArrayMatrix;
-using Matrix::JaggedMatrix;
+namespace Matrix {
 
-namespace {
-
-// ---------------------------------------------------------------------------
-// Вспомогательные функции
-// ---------------------------------------------------------------------------
+namespace detail {
 
 template <typename T>
-::testing::AssertionResult NearEq(T a, T b, double eps = 1e-6) {
-    const double da = static_cast<double>(a);
-    const double db = static_cast<double>(b);
-    const double scale = std::max(1.0, std::max(std::fabs(da), std::fabs(db)));
-    if (std::fabs(da - db) <= eps * scale) return ::testing::AssertionSuccess();
-    return ::testing::AssertionFailure() << "expected " << b << ", got " << a;
-}
+struct WideInteger {
+    using type = T;
+};
 
-// ---------------------------------------------------------------------------
-// Общие проверки для ArrayMatrix и JaggedMatrix
-//
-// ВАЖНО (инварианты тестов):
-//   * все ОЖИДАЕМЫЕ определители гарантированно помещаются в проверяемый тип;
-//   * матрицы подобраны так, что и промежуточные значения корректной
-//     реализации (Bareiss с точным делением на предыдущий пивот) тоже
-//     помещаются в проверяемый тип.
-// ---------------------------------------------------------------------------
-
-// ---- int ------------------------------------------------------------------
-
-template <template <typename> class M>
-void testCommonInt() {
-    // Пустая матрица -> 1 по соглашению
-    EXPECT_EQ(M<int>(0).Determinant(), 1);
-
-    // 1x1
-    EXPECT_EQ(M<int>(1, { 5}).Determinant(),   5);
-    EXPECT_EQ(M<int>(1, {-5}).Determinant(),  -5);
-    EXPECT_EQ(M<int>(1, { 0}).Determinant(),   0);
-    EXPECT_EQ(M<int>(1, {42}).Determinant(),  42);
-
-    // 2x2
-    EXPECT_EQ(M<int>(2, {1, 2, 3, 4}).Determinant(), -2);
-    EXPECT_EQ(M<int>(2, {2, 0, 0, 3}).Determinant(),  6);
-    EXPECT_EQ(M<int>(2, {1, 2, 2, 4}).Determinant(),  0);   // singular
-    EXPECT_EQ(M<int>(2, {0, 1, 1, 0}).Determinant(), -1);   // pivot needed
-    EXPECT_EQ(M<int>(2, {0, 0, 0, 0}).Determinant(),  0);
-
-    // 3x3 известное значение: det = -3
-    EXPECT_EQ(M<int>(3, {1, 2, 3,
-                         4, 5, 6,
-                         7, 8, 10}).Determinant(), -3);
-
-    // 3x3 единичная
-    EXPECT_EQ(M<int>(3, {1, 0, 0,
-                         0, 1, 0,
-                         0, 0, 1}).Determinant(), 1);
-
-    // 3x3 верхнетреугольная: 2 * 3 * 6 = 36
-    EXPECT_EQ(M<int>(3, {2, 7, 5,
-                         0, 3, 4,
-                         0, 0, 6}).Determinant(), 36);
-
-    // 3x3, требующая перестановки строк (нуль на диагонали):
-    //   det = 0·(0·0−4·6) − 2·(1·0−4·5) + 3·(1·6−0·5) = 40 + 18 = 58
-    EXPECT_EQ(M<int>(3, {0, 2, 3,
-                         1, 0, 4,
-                         5, 6, 0}).Determinant(), 58);
-
-    // 4x4 Vandermonde (x = 2,3,4,5):
-    //   det = ∏_{i<j}(x_j − x_i) = 1·2·3·1·2·1 = 12
-    EXPECT_EQ(M<int>(4, {1, 1,  1,   1,
-                         2, 3,  4,   5,
-                         4, 9, 16,  25,
-                         8, 27, 64, 125}).Determinant(), 12);
-
-    // 4x4 верхнетреугольная: 1·5·8·10 = 400
-    EXPECT_EQ(M<int>(4, {1, 2, 3, 4,
-                         0, 5, 6, 7,
-                         0, 0, 8, 9,
-                         0, 0, 0, 10}).Determinant(), 400);
-
-    // 4x4 с перестановкой: block-diag([[0,1],[1,0]], [2], [3]) => -1·2·3 = -6
-    EXPECT_EQ(M<int>(4, {0, 1, 0, 0,
-                         1, 0, 0, 0,
-                         0, 0, 2, 0,
-                         0, 0, 0, 3}).Determinant(), -6);
-
-    // 4x4 с линейно-зависимыми строками (строка i = (j+i)) -> 0
-    EXPECT_EQ(M<int>(4, {1, 2, 3, 4,
-                         2, 3, 4, 5,
-                         3, 4, 5, 6,
-                         4, 5, 6, 7}).Determinant(), 0);
-
-    // 5x5 диагональная: 11·13·17·19·23 = 1_062_347 (помещается в int).
-    // Корректный Bareiss держит промежуточные ≤ 1_062_347.
-    EXPECT_EQ(M<int>(5, {11, 0,  0,  0,  0,
-                          0,13,  0,  0,  0,
-                          0, 0, 17,  0,  0,
-                          0, 0,  0, 19,  0,
-                          0, 0,  0,  0, 23}).Determinant(), 1062347);
-
-    // Отрицательные значения: det = -det(положительный аналог) = 3
-    EXPECT_EQ(M<int>(3, {-1, -2, -3,
-                         -4, -5, -6,
-                         -7, -8, -10}).Determinant(), 3);
-
-    // Изменение через At()
-    M<int> m(2);
-    m.At(0, 0) = 3;
-    m.At(1, 1) = 7;
-    EXPECT_EQ(m.Determinant(), 21);
-}
-
-// ---- long long ------------------------------------------------------------
-//
-// Все ожидания и промежуточные (при корректном Bareiss) укладываются
-// в long long (гарантированный максимум ~9.22e18).
-
-template <template <typename> class M>
-void testCommonLongLong() {
-    EXPECT_EQ(M<long long>(0).Determinant(), 1LL);
-    EXPECT_EQ(M<long long>(1, {1234567890123LL}).Determinant(), 1234567890123LL);
-
-    // 4x4 diag(1e5, 1e4, 1e3, 1e2): det = 1e14 — влезает в long long
-    M<long long> m(4, {100000, 0,     0,    0,
-                       0,      10000, 0,    0,
-                       0,      0,     1000, 0,
-                       0,      0,     0,    100});
-    EXPECT_EQ(m.Determinant(), 100000LL * 10000 * 1000 * 100);
-}
-
-// ---- float / double -------------------------------------------------------
-
-template <template <typename> class M>
-void testCommonFloating() {
-    // Пустая
-    EXPECT_DOUBLE_EQ(static_cast<double>(M<double>(0).Determinant()), 1.0);
-
-    // 1x1
-    EXPECT_DOUBLE_EQ(M<double>(1, {2.5}).Determinant(),   2.5);
-    EXPECT_DOUBLE_EQ(M<double>(1, {-3.25}).Determinant(), -3.25);
-
-    // 2x2: 1·4 − 2·3 = -2
-    EXPECT_DOUBLE_EQ(M<double>(2, {1.0, 2.0,
-                                   3.0, 4.0}).Determinant(), -2.0);
-
-    // Единичная 5x5
-    {
-        std::vector<double> v(25, 0.0);
-        for (int i = 0; i < 5; ++i) v[i * 5 + i] = 1.0;
-        EXPECT_DOUBLE_EQ(M<double>(5, v).Determinant(), 1.0);
-    }
-
-    // Диагональная 4x4: 2·3·4·5 = 120
-    EXPECT_TRUE(NearEq(M<double>(4, {2.0, 0,   0,   0,
-                                     0,   3.0, 0,   0,
-                                     0,   0,   4.0, 0,
-                                     0,   0,   0,   5.0}).Determinant(), 120.0));
-
-    // Известное 3x3: det = -3
-    EXPECT_TRUE(NearEq(M<double>(3, {1.0, 2.0, 3.0,
-                                     4.0, 5.0, 6.0,
-                                     7.0, 8.0, 10.0}).Determinant(), -3.0));
-
-    // Сингулярная (3-я строка = комбинация первых двух)
-    EXPECT_TRUE(NearEq(M<double>(3, {1.0, 2.0, 3.0,
-                                     2.0, 4.0, 6.0,
-                                     1.0, 1.0, 1.0}).Determinant(), 0.0));
-
-    // Требуется перестановка: det = 58 (см. целочисленный аналог)
-    EXPECT_TRUE(NearEq(M<double>(3, {0.0, 2.0, 3.0,
-                                     1.0, 0.0, 4.0,
-                                     5.0, 6.0, 0.0}).Determinant(), 58.0));
-
-    // Скалярная: k·I_n, det = k^n
-    {
-        constexpr int n = 4;
-        std::vector<double> v(n * n, 0.0);
-        for (int i = 0; i < n; ++i) v[i * n + i] = 1.5;
-        EXPECT_TRUE(NearEq(M<double>(n, v).Determinant(),
-                           std::pow(1.5, n), 1e-9));
-    }
-
-    // float
-    EXPECT_TRUE(NearEq(M<float>(3, {1.f, 2.f, 3.f,
-                                    4.f, 5.f, 6.f,
-                                    7.f, 8.f, 10.f}).Determinant(), -3.f, 1e-4f));
-}
-
-// ---- Исключения в конструкторе --------------------------------------------
-
-template <template <typename> class M>
-void testConstructorExceptions() {
-    EXPECT_THROW(M<int>(2, {1, 2, 3}),     std::invalid_argument);
-    EXPECT_THROW(M<int>(3, {1, 2}),        std::invalid_argument);
-    EXPECT_THROW(M<int>(0, {1}),           std::invalid_argument);
-    EXPECT_THROW(M<double>(2, {1.0, 2.0}), std::invalid_argument);
-}
-
-// ---- Согласованность Array vs Jagged на одних данных ----------------------
+template <> struct WideInteger<std::int8_t>  { using type = std::int16_t; };
+template <> struct WideInteger<std::int16_t> { using type = std::int32_t; };
+template <> struct WideInteger<std::int32_t> { using type = std::int64_t; };
+#ifdef __SIZEOF_INT128__
+template <> struct WideInteger<std::int64_t> { using type = __int128_t; };
+#endif
+template <> struct WideInteger<long long> {
+#ifdef __SIZEOF_INT128__
+    using type = __int128_t;
+#else
+    using type = long double;
+#endif
+};
 
 template <typename T>
-void testArrayVsJaggedConsistency(const std::vector<std::vector<T>>& rows) {
-    const std::size_t n = rows.size();
-    std::vector<T> flat;
-    flat.reserve(n * n);
-    for (const auto& r : rows)
-        for (auto x : r) flat.push_back(x);
+using WideInteger_t = typename WideInteger<T>::type;
 
-    ArrayMatrix<T>  a(n, flat);
-    JaggedMatrix<T> j(n, flat);
+// Максимальный размер матриц для вычислений в буфере std::array без аллокаций
+inline constexpr std::size_t kMaxStaticMatrixDim = 64;
 
-    EXPECT_EQ(static_cast<long double>(a.Determinant()),
-              static_cast<long double>(j.Determinant()));
-}
+} // namespace detail
 
-// ===========================================================================
-//                                        Наборы тестов для ArrayMatrix
-// ===========================================================================
+// ============================================================================
+// 1. Интерфейс IMatrix
+// ============================================================================
+template <typename T>
+class IMatrix {
+public:
+    virtual ~IMatrix() = default;
 
-TEST(ArrayMatrixInt,        All) { testCommonInt<ArrayMatrix>(); }
-TEST(ArrayMatrixLongLong,   All) { testCommonLongLong<ArrayMatrix>(); }
-TEST(ArrayMatrixFloating,   All) { testCommonFloating<ArrayMatrix>(); }
-TEST(ArrayMatrixCtorThrows, All) { testConstructorExceptions<ArrayMatrix>(); }
+    [[nodiscard]] virtual T& At(std::size_t row, std::size_t col) = 0;
+    [[nodiscard]] virtual const T& At(std::size_t row, std::size_t col) const = 0;
+    [[nodiscard]] virtual std::size_t Size() const noexcept = 0;
+    [[nodiscard]] virtual T Determinant() const = 0;
+};
 
-TEST(ArrayMatrix, AtReturnsReference) {
-    ArrayMatrix<int> m(2);
-    int& ref = m.At(1, 1);
-    ref = 99;
-    EXPECT_EQ(m.At(1, 1), 99);
-}
+// Предварительное объявление базового класса Matrix
+template <typename T>
+class Matrix;
 
-TEST(ArrayMatrix, AtLayoutRowMajor) {
-    ArrayMatrix<int> m(3, {1, 2, 3,
-                           4, 5, 6,
-                           7, 8, 9});
-    EXPECT_EQ(m.At(0, 0), 1);
-    EXPECT_EQ(m.At(0, 2), 3);
-    EXPECT_EQ(m.At(1, 0), 4);
-    EXPECT_EQ(m.At(2, 2), 9);
-}
+// ============================================================================
+// 2. Прокси-класс DeterminantProxy
+// ============================================================================
+template <typename T>
+class DeterminantProxy;
 
-TEST(ArrayMatrix, NegativeDeterminantSign) {
-    ArrayMatrix<int> a(2, {1, 0, 0, 1});
-    ArrayMatrix<int> b(2, {0, 1, 1, 0});
-    EXPECT_EQ(a.Determinant(),  1);
-    EXPECT_EQ(b.Determinant(), -1);
-}
+// Специализация для целочисленных типов (Алгоритм Барейса на std::array)
+template <std::integral T>
+class DeterminantProxy<T> {
+public:
+    [[nodiscard]] static T Calculate(const IMatrix<T>& matrix) {
+        const std::size_t n = matrix.Size();
+        if (n == 0) return T{1};
 
-// Точный тест на большие целые.
-// ВНИМАНИЕ: ожидание гарантированно помещается в long long.
-//   a*b       ≈ 1.00004e12 < 9.22e18
-//   a*b*c     ≈ 1.00007e18 < 9.22e18
-TEST(ArrayMatrix, LargeIntegerExactness) {
-    constexpr long long a = 1000003LL;
-    constexpr long long b = 1000033LL;
-    constexpr long long c = 1000037LL;
-
-    // sanity: эталон не переполняется на этапе компиляции
-    static_assert(a * b > 0, "a*b should fit in long long");
-    static_assert(a * b * c > 0, "a*b*c should fit in long long");
-
-    ArrayMatrix<long long> m(3, {a, 0, 0,
-                                 0, b, 0,
-                                 0, 0, c});
-
-    EXPECT_EQ(m.Determinant(), a * b * c);
-}
-
-// ===========================================================================
-//                                        Наборы тестов для JaggedMatrix
-// ===========================================================================
-
-TEST(JaggedMatrixInt,        All) { testCommonInt<JaggedMatrix>(); }
-TEST(JaggedMatrixLongLong,   All) { testCommonLongLong<JaggedMatrix>(); }
-TEST(JaggedMatrixFloating,   All) { testCommonFloating<JaggedMatrix>(); }
-TEST(JaggedMatrixCtorThrows, All) { testConstructorExceptions<JaggedMatrix>(); }
-
-TEST(JaggedMatrix, AtReturnsReference) {
-    JaggedMatrix<double> m(2);
-    m.At(0, 0) = 1.0;
-    m.At(1, 1) = 2.0;
-    EXPECT_DOUBLE_EQ(m.Determinant(), 2.0);
-}
-
-// ===========================================================================
-//                 Параметризованный вариант: одни тесты на оба класса
-// ===========================================================================
-
-class StorageVariants :
-    public ::testing::TestWithParam<std::function<std::unique_ptr<Matrix::Matrix<int>>(
-        std::size_t, const std::vector<int>&)>> {};
-
-TEST_P(StorageVariants, RandomSmallMatricesMatchReference) {
-    std::mt19937 rng(12345);
-    std::uniform_int_distribution<int> dist(-5, 5);
-
-    for (int iter = 0; iter < 200; ++iter) {
-        const std::size_t n = 1 + (rng() % 4);  // 1..4
-        std::vector<int> v(n * n);
-        for (auto& x : v) x = dist(rng);
-
-        auto m = GetParam()(n, v);
-        const int det = m->Determinant();
-
-        std::function<int(std::vector<std::vector<int>>&)> ref =
-            [&](std::vector<std::vector<int>>& a) -> int {
-                const std::size_t k = a.size();
-                if (k == 0) return 1;
-                if (k == 1) return a[0][0];
-                if (k == 2) return a[0][0] * a[1][1] - a[0][1] * a[1][0];
-                int s = 0;
-                int sign = 1;
-                for (std::size_t j = 0; j < k; ++j) {
-                    std::vector<std::vector<int>> sub(k - 1, std::vector<int>(k - 1));
-                    for (std::size_t r = 1; r < k; ++r) {
-                        std::size_t cc = 0;
-                        for (std::size_t c = 0; c < k; ++c) {
-                            if (c == j) continue;
-                            sub[r - 1][cc++] = a[r][c];
-                        }
-                    }
-                    s += sign * a[0][j] * ref(sub);
-                    sign = -sign;
+        // Замена std::vector<std::vector<T>> на плоский std::array в стеке
+        // Избавляет от динамических аллокаций при расчете определителя
+        if (n <= detail::kMaxStaticMatrixDim) {
+            std::array<T, detail::kMaxStaticMatrixDim * detail::kMaxStaticMatrixDim> a{};
+            for (std::size_t i = 0; i < n; ++i) {
+                for (std::size_t j = 0; j < n; ++j) {
+                    a[i * n + j] = matrix.At(i, j);
                 }
-                return s;
-            };
+            }
+            return ComputeBareiss(a.data(), n);
+        }
 
-        std::vector<std::vector<int>> a(n, std::vector<int>(n));
-        for (std::size_t i = 0; i < n; ++i)
-            for (std::size_t j = 0; j < n; ++j)
-                a[i][j] = v[i * n + j];
-
-        EXPECT_EQ(det, ref(a)) << "n = " << n;
+        // Fallback на динамический плоский буфер для экстремально больших N
+        std::vector<T> a(n * n);
+        for (std::size_t i = 0; i < n; ++i) {
+            for (std::size_t j = 0; j < n; ++j) {
+                a[i * n + j] = matrix.At(i, j);
+            }
+        }
+        return ComputeBareiss(a.data(), n);
     }
-}
 
-static std::unique_ptr<Matrix::Matrix<int>>
-makeArray(std::size_t n, const std::vector<int>& v) {
-    return std::make_unique<ArrayMatrix<int>>(n, v);
-}
-static std::unique_ptr<Matrix::Matrix<int>>
-makeJagged(std::size_t n, const std::vector<int>& v) {
-    return std::make_unique<JaggedMatrix<int>>(n, v);
-}
+private:
+    static constexpr T ComputeBareiss(T* a, std::size_t n) {
+        using Wide = detail::WideInteger_t<T>;
 
-INSTANTIATE_TEST_SUITE_P(
-    Storages, StorageVariants,
-    ::testing::Values(makeArray, makeJagged));
+        T sign = T{1};
+        Wide prev = Wide{1};
 
-} // namespace
+        for (std::size_t k = 0; k + 1 < n; ++k) {
+            if (a[k * n + k] == T{0}) {
+                std::size_t pivot = k + 1;
+                while (pivot < n && a[pivot * n + k] == T{0}) {
+                    ++pivot;
+                }
+                if (pivot == n) {
+                    return T{0};
+                }
+
+                // Перестановка строк без аллокаций
+                for (std::size_t j = 0; j < n; ++j) {
+                    std::swap(a[k * n + j], a[pivot * n + j]);
+                }
+                sign = -sign;
+            }
+
+            const Wide pivot_val = static_cast<Wide>(a[k * n + k]);
+
+            for (std::size_t i = k + 1; i < n; ++i) {
+                for (std::size_t j = k + 1; j < n; ++j) {
+                    const Wide num = static_cast<Wide>(a[i * n + j]) * pivot_val
+                                   - static_cast<Wide>(a[i * n + k]) * static_cast<Wide>(a[k * n + j]);
+                    a[i * n + j] = static_cast<T>(num / prev);
+                }
+            }
+
+            prev = pivot_val;
+        }
+
+        return sign * a[(n - 1) * n + (n - 1)];
+    }
+};
+
+// Специализация для вещественных типов (Метод Гаусса на std::array)
+template <std::floating_point T>
+class DeterminantProxy<T> {
+public:
+    [[nodiscard]] static T Calculate(const IMatrix<T>& matrix) {
+        const std::size_t n = matrix.Size();
+        if (n == 0) return T{1};
+
+        if (n <= detail::kMaxStaticMatrixDim) {
+            std::array<T, detail::kMaxStaticMatrixDim * detail::kMaxStaticMatrixDim> m{};
+            for (std::size_t i = 0; i < n; ++i) {
+                for (std::size_t j = 0; j < n; ++j) {
+                    m[i * n + j] = matrix.At(i, j);
+                }
+            }
+            return ComputeGaussian(m.data(), n);
+        }
+
+        std::vector<T> m(n * n);
+        for (std::size_t i = 0; i < n; ++i) {
+            for (std::size_t j = 0; j < n; ++j) {
+                m[i * n + j] = matrix.At(i, j);
+            }
+        }
+        return ComputeGaussian(m.data(), n);
+    }
+
+private:
+    static constexpr T Abs(T val) noexcept {
+        return val < T{0} ? -val : val;
+    }
+
+    static constexpr T ComputeGaussian(T* m, std::size_t n) {
+        T det = T{1};
+
+        for (std::size_t i = 0; i < n; ++i) {
+            std::size_t pivot = i;
+            T max_val = Abs(m[i * n + i]);
+            for (std::size_t j = i + 1; j < n; ++j) {
+                if (const T val = Abs(m[j * n + i]); val > max_val) {
+                    max_val = val;
+                    pivot = j;
+                }
+            }
+
+            if (max_val == T{0}) {
+                return T{0};
+            }
+
+            if (pivot != i) {
+                for (std::size_t k = 0; k < n; ++k) {
+                    std::swap(m[i * n + k], m[pivot * n + k]);
+                }
+                det = -det;
+            }
+
+            det *= m[i * n + i];
+
+            for (std::size_t j = i + 1; j < n; ++j) {
+                const T factor = m[j * n + i] / m[i * n + i];
+                for (std::size_t k = i; k < n; ++k) {
+                    m[j * n + k] -= factor * m[i * n + k];
+                }
+            }
+        }
+
+        return det;
+    }
+};
+
+// ============================================================================
+// Базовый класс Matrix
+// ============================================================================
+template <typename T>
+class Matrix : public IMatrix<T> {
+protected:
+    std::size_t size_{0};
+
+public:
+    constexpr explicit Matrix(std::size_t size) noexcept : size_(size) {}
+    constexpr ~Matrix() override = default;
+
+    [[nodiscard]] constexpr std::size_t Size() const noexcept override {
+        return size_;
+    }
+
+    [[nodiscard]] T Determinant() const override {
+        return DeterminantProxy<T>::Calculate(*this);
+    }
+};
+
+// ============================================================================
+// Реализация ArrayMatrix
+// ============================================================================
+template <typename T>
+class ArrayMatrix : public Matrix<T> {
+private:
+    std::vector<T> data_;
+
+public:
+    constexpr explicit ArrayMatrix(std::size_t size)
+        : Matrix<T>(size), data_(size * size, T{}) {}
+
+    ArrayMatrix(std::size_t size, const std::vector<T>& values)
+        : Matrix<T>(size), data_(values) {
+        if (values.size() != size * size) {
+            throw std::invalid_argument("ArrayMatrix: values size mismatch");
+        }
+    }
+
+    ArrayMatrix(std::size_t size, std::initializer_list<T> values)
+        : Matrix<T>(size), data_(values) {
+        if (values.size() != size * size) {
+            throw std::invalid_argument("ArrayMatrix: values size mismatch");
+        }
+    }
+
+    [[nodiscard]] constexpr T& At(std::size_t row, std::size_t col) noexcept override {
+        return data_[row * this->size_ + col];
+    }
+
+    [[nodiscard]] constexpr const T& At(std::size_t row, std::size_t col) const noexcept override {
+        return data_[row * this->size_ + col];
+    }
+};
+
+// ============================================================================
+// Реализация JaggedMatrix
+// ============================================================================
+template <typename T>
+class JaggedMatrix : public Matrix<T> {
+private:
+    std::vector<std::vector<T>> data_;
+
+public:
+    constexpr explicit JaggedMatrix(std::size_t size)
+        : Matrix<T>(size), data_(size, std::vector<T>(size, T{})) {}
+
+    JaggedMatrix(std::size_t size, const std::vector<T>& values)
+        : Matrix<T>(size), data_(size, std::vector<T>(size, T{})) {
+        if (values.size() != size * size) {
+            throw std::invalid_argument("JaggedMatrix: values size mismatch");
+        }
+        for (std::size_t i = 0; i < size; ++i) {
+            for (std::size_t j = 0; j < size; ++j) {
+                data_[i][j] = values[i * size + j];
+            }
+        }
+    }
+
+    JaggedMatrix(std::size_t size, std::initializer_list<T> values)
+        : Matrix<T>(size), data_(size, std::vector<T>(size, T{})) {
+        if (values.size() != size * size) {
+            throw std::invalid_argument("JaggedMatrix: values size mismatch");
+        }
+        auto it = values.begin();
+        for (std::size_t i = 0; i < size; ++i) {
+            for (std::size_t j = 0; j < size; ++j) {
+                data_[i][j] = *it++;
+            }
+        }
+    }
+
+    [[nodiscard]] constexpr T& At(std::size_t row, std::size_t col) noexcept override {
+        return data_[row][col];
+    }
+
+    [[nodiscard]] constexpr const T& At(std::size_t row, std::size_t col) const noexcept override {
+        return data_[row][col];
+    }
+};
+
+} // namespace Matrix
+
+#endif // MATRIX_HPP_
