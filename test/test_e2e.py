@@ -8,11 +8,11 @@ E2E-тесты для библиотеки матриц (без pytest).
   * по умолчанию ищется ./build/matrix_cli и ../build/matrix_cli
 
 Запуск:
-  python tests/run_e2e.py
-  python tests/run_e2e.py --cli ./build/matrix_cli
-  python tests/run_e2e.py -v            # печатать каждый тест подробно
-  python tests/run_e2e.py -k random     # запускать только тесты, содержащие "random"
-  python tests/run_e2e.py --no-color    # без ANSI-раскраски
+  python test/test_e2e.py
+  python test/test_e2e.py --cli ./build/matrix_cli
+  python test/test_e2e.py -v            # печатать каждый тест подробно
+  python test/test_e2e.py -k random     # запускать только тесты, содержащие "random"
+  python test/test_e2e.py --no-color    # без ANSI-раскраски
 """
 
 from __future__ import annotations
@@ -425,6 +425,24 @@ def bad_type():
 def bad_storage():
     run_cli_expect_failure("quux", "int", 1, [0])
 
+
+@test
+def invalid_dimensions():
+    for n in ("-1", "2junk", "", "1.5", "18446744073709551616", "18446744073709551615"):
+        proc = run_cli_expect_failure("array", "int", n, [])
+        check(proc.returncode > 0, "must reject input without crashing")
+
+@test
+def missing_arguments():
+    proc = subprocess.run([CLI_PATH], capture_output=True, text=True, timeout=20)
+    check(proc.returncode > 0, "missing arguments must fail")
+    check("usage" in proc.stderr, "usage must be printed")
+
+@test
+def result_overflow():
+    for storage in STORAGES:
+        proc = run_cli_expect_failure(storage, "int", 2, [2147483647, 0, 0, 2])
+        check("overflow" in proc.stderr or "fit" in proc.stderr, "overflow diagnostic")
 
 # ===========================================================================
 #                               РАННЕР
