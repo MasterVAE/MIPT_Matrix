@@ -35,152 +35,183 @@ using WideInteger_t = typename WideInteger<T>::type;
 
 } // namespace Detail
 
+template <typename T, std::size_t N>
+class IMatrix {
+public:
+    constexpr virtual ~IMatrix() = default;
 
-template <typename T>
-class Matrix {
-protected:
-    std::size_t size_;
+    constexpr virtual T& At(std::size_t row, std::size_t col) = 0;
+    constexpr virtual const T& At(std::size_t row, std::size_t col) const = 0;
+    constexpr virtual std::size_t Size() const = 0;
+    constexpr virtual T Determinant() const = 0;
+};
 
-    T DeterminantFloating()
-    {
-        const std::size_t n = size_;
-        if (n == 0) return T{1};
+template <typename T, std::size_t N>
+class DeterminantProxy;
 
-        std::vector<std::vector<T>> m(n, std::vector<T>(n, T{}));
-        for (std::size_t i = 0; i < n; ++i)
-            for (std::size_t j = 0; j < n; ++j)
-                m[i][j] = At(i, j);
+template <std::integral T, std::size_t N>
+class DeterminantProxy<T, N> {
+public:
+    static constexpr T Calculate(const IMatrix<T, N>& matrix) {
+        if constexpr (N == 0) {
+            return T{1};
+        } else {
+            using Wide = detail::WideInteger_t<T>;
 
-        T det = T{1};
-
-        for (std::size_t i = 0; i < n; ++i) {
-            std::size_t pivot = n;
-            for (std::size_t j = i; j < n; ++j) {
-                if (m[j][i] != T{}) { pivot = j; break; }
-            }
-            if (pivot == n) return T{};
-
-            if (pivot != i) {
-                std::swap(m[i], m[pivot]);
-                det = -det;
-            }
-
-            det *= m[i][i];
-
-            for (std::size_t j = i + 1; j < n; ++j) {
-                T factor = m[j][i] / m[i][i];
-                for (std::size_t k = i; k < n; ++k)
-                    m[j][k] -= factor * m[i][k];
-            }
-        }
-
-        return det;
-    }
-
-    T DeterminantInteger()
-    {
-        using Wide = Detail::WideInteger_t<T>;
-
-        const std::size_t n = size_;
-        if (n == 0) return T{1};
-
-        std::vector<std::vector<T>> a(n, std::vector<T>(n, T{}));
-        for (std::size_t i = 0; i < n; ++i)
-            for (std::size_t j = 0; j < n; ++j)
-                a[i][j] = At(i, j);
-
-        T    sign = T{1};
-        Wide prev = Wide{1};
-
-        for (std::size_t k = 0; k + 1 < n; ++k) {
-            if (a[k][k] == T{}) {
-                std::size_t pivot = k + 1;
-                while (pivot < n && a[pivot][k] == T{})
-                    ++pivot;
-
-                if (pivot == n)
-                    return T{};
-
-                std::swap(a[k], a[pivot]);
-                sign = -sign;
-            }
-
-            const Wide pivot = static_cast<Wide>(a[k][k]);
-
-            for (std::size_t i = k + 1; i < n; ++i) {
-                for (std::size_t j = k + 1; j < n; ++j) {
-                    Wide num = static_cast<Wide>(a[i][j]) * pivot
-                             - static_cast<Wide>(a[i][k])
-                               * static_cast<Wide>(a[k][j]);
-                    a[i][j] = static_cast<T>(num / prev);
+            std::array<std::array<T, N>, N> a{};
+            for (std::size_t i = 0; i < N; ++i) {
+                for (std::size_t j = 0; j < N; ++j) {
+                    a[i][j] = matrix.At(i, j);
                 }
             }
 
-            prev = pivot;
+            T sign = T{1};
+            Wide prev = Wide{1};
+
+            for (std::size_t k = 0; k + 1 < N; ++k) {
+                if (a[k][k] == T{0}) {
+                    std::size_t pivot = k + 1;
+                    while (pivot < N && a[pivot][k] == T{0}) {
+                        ++pivot;
+                    }
+                    if (pivot == N) {
+                        return T{0};
+                    }
+                    std::swap(a[k], a[pivot]);
+                    sign = -sign;
+                }
+
+                const Wide pivot_val = static_cast<Wide>(a[k][k]);
+
+                for (std::size_t i = k + 1; i < N; ++i) {
+                    for (std::size_t j = k + 1; j < N; ++j) {
+                        const Wide num = static_cast<Wide>(a[i][j]) * pivot_val
+                                       - static_cast<Wide>(a[i][k]) * static_cast<Wide>(a[k][j]);
+                        a[i][j] = static_cast<T>(num / prev);
+                    }
+                }
+                prev = pivot_val;
+            }
+
+            return sign * a[N - 1][N - 1];
         }
-
-        return sign * a[n - 1][n - 1];
     }
+};
 
+template <std::floating_point T, std::size_t N>
+class DeterminantProxy<T, N> {
 public:
-    Matrix(std::size_t size) : size_(size) {}
-    virtual ~Matrix() = default;
-    virtual T& At(std::size_t, std::size_t) = 0;
-
-    T Determinant()
-    {
-        if constexpr (std::is_integral_v<T>) {
-            return DeterminantInteger();
+    static constexpr T Calculate(const IMatrix<T, N>& matrix) {
+        if constexpr (N == 0) {
+            return T{1};
         } else {
-            return DeterminantFloating();
+            std::array<std::array<T, N>, N> m{};
+            for (std::size_t i = 0; i < N; ++i) {
+                for (std::size_t j = 0; j < N; ++j) {
+                    m[i][j] = matrix.At(i, j);
+                }
+            }
+
+            T det = T{1};
+
+            for (std::size_t i = 0; i < N; ++i) {
+                std::size_t pivot = i;
+                T max_val = Abs(m[i][i]);
+                for (std::size_t j = i + 1; j < N; ++j) {
+                    if (const T val = Abs(m[j][i]); val > max_val) {
+                        max_val = val;
+                        pivot = j;
+                    }
+                }
+
+                if (max_val == T{0}) {
+                    return T{0};
+                }
+
+                if (pivot != i) {
+                    std::swap(m[i], m[pivot]);
+                    det = -det;
+                }
+
+                det *= m[i][i];
+
+                for (std::size_t j = i + 1; j < N; ++j) {
+                    const T factor = m[j][i] / m[i][i];
+                    for (std::size_t k = i; k < N; ++k) {
+                        m[j][k] -= factor * m[i][k];
+                    }
+                }
+            }
+
+            return det;
         }
     }
-};
 
-
-template <typename T>
-class ArrayMatrix : public Matrix<T> {
 private:
-    std::vector<T> data_;
-
-public:
-    ArrayMatrix(std::size_t size)
-        : Matrix<T>(size), data_(size * size, T{}) {}
-
-    ArrayMatrix(std::size_t size, const std::vector<T>& values)
-        : Matrix<T>(size), data_(values)
-    {
-        if (values.size() != size * size)
-            throw std::invalid_argument("ArrayMatrix: values size mismatch");
-    }
-
-    T& At(std::size_t row, std::size_t col) override {
-        return data_[row * this->size_ + col];
+    static constexpr T Abs(T val) {
+        return val < T{0} ? -val : val;
     }
 };
 
-
-template <typename T>
-class JaggedMatrix : public Matrix<T> {
-private:
-    std::vector<std::vector<T>> data_;
-
+template <typename T, std::size_t N>
+class Matrix : public IMatrix<T, N> {
 public:
-    JaggedMatrix(std::size_t size)
-        : Matrix<T>(size), data_(size, std::vector<T>(size, T{})) {}
+    constexpr Matrix() = default;
+    constexpr ~Matrix() override = default;
 
-    JaggedMatrix(std::size_t size, const std::vector<T>& values)
-        : Matrix<T>(size), data_(size, std::vector<T>(size, T{}))
-    {
-        if (values.size() != size * size)
-            throw std::invalid_argument("JaggedMatrix: values size mismatch");
-
-        for (std::size_t i = 0; i < size; ++i)
-            for (std::size_t j = 0; j < size; ++j)
-                data_[i][j] = values[i * size + j];
+    constexpr std::size_t Size() const override {
+        return N;
     }
 
-    T& At(std::size_t row, std::size_t col) override {
+    constexpr T Determinant() const override {
+        return DeterminantProxy<T, N>::Calculate(*this);
+    }
+};
+
+template <typename T, std::size_t N>
+class ArrayMatrix final : public Matrix<T, N> {
+private:
+    std::array<T, N * N> data_{};
+
+public:
+    constexpr ArrayMatrix() = default;
+
+    constexpr explicit ArrayMatrix(const std::array<T, N * N>& values) noexcept
+        : data_(values) {}
+
+    constexpr T& At(std::size_t row, std::size_t col) override {
+        return data_[row * N + col];
+    }
+
+    constexpr const T& At(std::size_t row, std::size_t col) const override {
+        return data_[row * N + col];
+    }
+};
+
+template <typename T, std::size_t N>
+class JaggedMatrix final : public Matrix<T, N> {
+private:
+    std::array<std::array<T, N>, N> data_{};
+
+public:
+    constexpr JaggedMatrix() = default;
+
+    constexpr explicit JaggedMatrix(const std::array<T, N * N>& values) {
+        for (std::size_t i = 0; i < N; ++i) {
+            for (std::size_t j = 0; j < N; ++j) {
+                data_[i][j] = values[i * N + j];
+            }
+        }
+    }
+
+    constexpr JaggedMatrix(const std::array<std::array<T, N>, N>& values) noexcept
+        : data_(values) {}
+
+    constexpr T& At(std::size_t row, std::size_t col) override {
+        return data_[row][col];
+    }
+
+    constexpr const T& At(std::size_t row, std::size_t col) const override {
         return data_[row][col];
     }
 };
